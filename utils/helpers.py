@@ -8,6 +8,21 @@ import joblib
 from PIL import Image
 
 
+# --- GET LATEST JPAR SCORES ----
+
+@st.cache_data
+def get_jpar_display_table(df):
+    df['Latest Event Date'] = pd.to_datetime(df['Latest Event Date'])
+    df_sorted = df.sort_values('Latest Event Date', ascending=False)
+    jpar_display_df = df_sorted.drop_duplicates(subset='member_id', keep='first')
+    jpar_display_df = jpar_display_df.sort_values(by='Latest JPAR').reset_index(drop=True)
+    jpar_display_df.index += 1
+    jpar_display_df['Latest Event Date'] = jpar_display_df['Latest Event Date'].dt.date
+
+    return jpar_display_df[['Name', 'Latest JPAR', 'Total Events', 'Latest Event Date', 'Latest Event']]
+
+
+
 # --------- USA JPA LOGO -----------
 def load_logo() -> Image:
     image_name = './data/logo.png'
@@ -133,7 +148,6 @@ def load_jpar_data():
     read in the JPAR data from the Excel file
     '''
     return None
-
 
 # ---------- Table for Rating Page ----------
 def compute_speed_puzzle_rankings(combined_df, min_puzzles=9, min_event_attempts=1, weighted=True):
@@ -304,3 +318,67 @@ def get_standard_ranking_table():
         .format({'avg_rank': '{:.1f}'})
     )
     return styled_df, results
+    
+
+def prepare_jpar_trends(df: pd.DataFrame):
+    """
+    Prepare percentile-banded JPAR evolution data over time.
+    Expects columns: 'event_id', 'member_id', 'full_name', 'JPAR'.
+    Returns:
+        trend_df: DataFrame with event_date, percentiles, median, fastest.
+    """
+    events = sorted(df['event_id'].dropna().unique())
+    latest_jpar = {}
+    records = []
+
+    for ev in events:
+        sub = df[df['event_id'] == ev]
+        for _, row in sub.iterrows():
+            pid = row['member_id']
+            jpar = row['JPAR Out']
+            if pd.notna(pid) and pd.notna(jpar):
+                latest_jpar[pid] = jpar
+
+        # convert event_id (YYYYMMDD-like) to datetime
+        date_str = str(int(float(ev)))[:6]
+        event_date = pd.to_datetime("20" + date_str, format="%Y%m%d")
+
+        if latest_jpar:
+            vals = np.array(list(latest_jpar.values()))
+            record = {
+                "event_date": event_date,
+                "vals": vals,
+                "p20": np.percentile(vals, 20),
+                "p30": np.percentile(vals, 30),
+                "p40": np.percentile(vals, 40),
+                "p60": np.percentile(vals, 60),
+                "p70": np.percentile(vals, 70),
+                "p80": np.percentile(vals, 80),
+                "median": np.median(vals),
+                "fastest": np.min(vals)
+            }
+            records.append(record)
+
+    trend_df = pd.DataFrame(records).sort_values("event_date")
+    return trend_df
+
+
+def get_person_jpar_trajectory(df: pd.DataFrame, full_name: str):
+    """
+    Get a specific participant's JPAR trajectory over time.
+    Returns DataFrame with columns: event_date, JPAR
+    """
+    person_df = df[
+        (df["Name"].str.lower() == full_name.lower()) &
+        (df["JPAR Out"].notna())
+    ].copy()
+
+    if person_df.empty:
+        return pd.DataFrame(columns=["event_date", "JPAR Out"])
+
+    person_df["event_date"] = person_df["event_id"].apply(
+        lambda x: pd.to_datetime("20" + str(int(float(x)))[:6], format="%Y%m%d")
+        if pd.notna(x) else np.nan
+    )
+
+    return person_df.sort_values("event_date")

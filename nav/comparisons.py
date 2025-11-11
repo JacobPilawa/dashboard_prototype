@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.colors as pc
 from datetime import datetime, timedelta
 
 import streamlit as st
@@ -9,10 +10,10 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from utils.helpers import get_standard_ranking_table, load_data, get_bottom_string
+from utils.helpers import prepare_jpar_trends, get_person_jpar_trajectory
 
 #### GET DATA
 df = load_data()
-styled_table, results = get_standard_ranking_table()
 bottom_string = get_bottom_string()
 
 def seconds_to_hms(seconds):
@@ -23,24 +24,27 @@ def seconds_to_hms(seconds):
     
     
 
-def display_summary_stats(comparison_df, results, df):
+def display_summary_stats(comparison_df, df, selected_puzzlers):
+    """
+    Display summary statistics for selected puzzlers, including:
+      - Summary table
+      - Avg time bar chart
+      - JPAR over time plot with percentile bands and individual puzzler lines
+    """
+
     st.markdown("""Here's some summary information for the selected puzzlers, sorted by their average time over the last 12 months.""")
 
-    # drop some irrelevant columns
-    summary_df = comparison_df[['Name', 'Time', 'PPM', 'time_in_seconds', 'Date']].copy()
-
-    # Ensure 'Date' is datetime
+    # --- SUMMARY TABLE ---
+    summary_df = comparison_df[['Name', 'Time', 'PPM', 'time_in_seconds', 'Date', 'Latest JPAR']].copy()
     summary_df['Date'] = pd.to_datetime(summary_df['Date'], errors='coerce')
 
-    # Get current date and filter for last 12 months
+    # Filter last 12 months
     latest_date = summary_df['Date'].max()
     one_year_ago = latest_date - pd.DateOffset(years=1)
     recent_df = summary_df[summary_df['Date'] >= one_year_ago]
 
-    # get overall summary statistics
     grouped_summary = (
-        summary_df
-        .groupby('Name')
+        summary_df.groupby('Name')
         .agg(
             avg_time_in_seconds=('time_in_seconds', 'mean'),
             avg_ppm=('PPM', 'mean'),
@@ -49,10 +53,8 @@ def display_summary_stats(comparison_df, results, df):
         .reset_index()
     )
 
-    # get last-year-only summary statistics
     recent_summary = (
-        recent_df
-        .groupby('Name')
+        recent_df.groupby('Name')
         .agg(
             last_year_avg_time=('time_in_seconds', 'mean'),
             last_year_avg_ppm=('PPM', 'mean'),
@@ -61,49 +63,41 @@ def display_summary_stats(comparison_df, results, df):
         .reset_index()
     )
 
-    # merge both summaries
     grouped_summary = grouped_summary.merge(recent_summary, on='Name', how='left')
 
-    # format full-period avg time
+    latest_jpar = (
+        summary_df.sort_values("Date")
+        .groupby("Name")
+        .tail(1)[["Name", "Latest JPAR"]]
+    )
+
+    grouped_summary = grouped_summary.merge(latest_jpar, on="Name", how="left")
+
     grouped_summary['Average Time'] = grouped_summary['avg_time_in_seconds'].apply(
         lambda x: f"{int(x // 3600):02}:{int((x % 3600) // 60):02}:{int(x % 60):02}"
     )
-
-    # format last-year avg time
     grouped_summary['Average Time (Last 12 Months)'] = grouped_summary['last_year_avg_time'].apply(
         lambda x: f"{int(x // 3600):02}:{int((x % 3600) // 60):02}:{int(x % 60):02}" if pd.notnull(x) else "-"
     )
-
-    # round PPMs
     grouped_summary['Average PPM'] = grouped_summary['avg_ppm'].round(2)
     grouped_summary['Average PPM (Last 12 Months)'] = grouped_summary['last_year_avg_ppm'].round(2).fillna("-")
-
-    # rename counts
     grouped_summary['Number of Events'] = grouped_summary['count']
     grouped_summary['Number of Events (Last 12 Months)'] = grouped_summary['last_year_count'].fillna(0).astype(int)
 
-    # merge ranks
-    results['Rank'] = results.index + 1
-    final_summary = grouped_summary.merge(results, on="Name", how='left')
-
-    # select and order final columns
-    final_summary = final_summary[[
-        'Name', 'Rank',
-        'Number of Events', 'Average Time',
-        'Number of Events (Last 12 Months)', 'Average Time (Last 12 Months)',
+    final_summary = grouped_summary[[
+        'Name',
+        'Number of Events',
+        'Average Time',
+        'Latest JPAR'
     ]]
 
-    # sort by average time (last 12 months)
-    final_summary = final_summary.sort_values(by='Average Time (Last 12 Months)')
-
-    # display the dataframe
     st.dataframe(final_summary.reset_index(drop=True), use_container_width=True)
 
-    # ---- Bar Chart of Avg Time (Last 12 Months) ----
+    # --- BAR CHART OF AVG TIME (LAST 12 MONTHS) ---
     plot_df = grouped_summary.dropna(subset=['last_year_avg_time']).copy()
-    plot_df = plot_df.sort_values(by='last_year_avg_time', ascending=True)  # Fastest on left
+    plot_df = plot_df.sort_values(by='last_year_avg_time', ascending=True)
     plot_df['time_in_hours'] = plot_df['last_year_avg_time'] / 3600
-    plot_df['avg_time_hms'] = plot_df['last_year_avg_time'].apply(seconds_to_hms)  # New column
+    plot_df['avg_time_hms'] = plot_df['last_year_avg_time'].apply(seconds_to_hms)
 
     hover_template = (
         '<b>Solver:</b> %{x}<br>'
@@ -113,7 +107,6 @@ def display_summary_stats(comparison_df, results, df):
     )
 
     fig = go.Figure()
-
     fig.add_trace(go.Bar(
         x=plot_df['Name'],
         y=plot_df['time_in_hours'],
@@ -131,34 +124,101 @@ def display_summary_stats(comparison_df, results, df):
         height=500
     )
 
-    st.plotly_chart(fig, use_container_width=True)    
-    
-    # ---- PTR Out Over Time Line Plot ----
+    st.plotly_chart(fig, use_container_width=True)
 
-    ptr_df = comparison_df[['Name', 'Date', 'JPAR Out']].dropna().copy()
-    ptr_df = ptr_df.sort_values(by='Date')
+    # --- JPAR OVER TIME WITH PERCENTILE BANDS ---
+    st.subheader("📈 JPAR Over Time 📉")
 
-    # Plotly line plot
-    fig_ptr = px.line(
-        ptr_df,
-        x='Date',
-        y='JPAR Out',
-        color='Name',
-        title='JPAR Over Time\n(Lower = Faster)',
-        labels={'PTR Out': 'PTR Out', 'Date': 'Date'},
-        template='plotly_white'
-    )
+    trend_df = prepare_jpar_trends(df)
+    if not trend_df.empty:
+        fig_jpar = go.Figure()
 
-    fig_ptr.update_traces(mode='lines+markers')  # Optional: show points as well
-    fig_ptr.update_layout(
-        height=500,
-        font=dict(size=12),
-        legend_title_text='Puzzler'
-    )
+        # Percentile bands
+        bands = [
+            ("p20", "p80", "rgba(220, 50, 50, 0.25)", "20–80% Range"),
+            ("p30", "p70", "rgba(220, 50, 50, 0.40)", "30–70% Range"),
+            ("p40", "p60", "rgba(220, 50, 50, 0.60)", "40–60% Range"),
+        ]
+        for low, high, color, label in bands:
+            fig_jpar.add_trace(go.Scatter(
+                x=pd.concat([trend_df["event_date"], trend_df["event_date"][::-1]]),
+                y=pd.concat([trend_df[low], trend_df[high][::-1]]),
+                fill="toself",
+                fillcolor=color,
+                line=dict(width=0),
+                hoverinfo="skip",
+                name=label,
+                showlegend=True
+            ))
 
-    st.plotly_chart(fig_ptr, use_container_width=True)
+        # Median line
+        fig_jpar.add_trace(go.Scatter(
+            x=trend_df["event_date"],
+            y=trend_df["median"],
+            mode="lines",
+            line=dict(color="darkred", width=2),
+            marker=dict(size=0),
+            name="Median JPAR"
+        ))
+        
+        # Choose a continuous sequential colorscale
+        colorscale = pc.sequential.Rainbow  # or any other Plotly sequential scale
+        
+        # Generate evenly spaced colors for the number of puzzlers
+        num_puzzlers = len(selected_puzzlers)
+        color_indices = np.linspace(0, 0.85, num_puzzlers)  # evenly spaced between 0 and 1
+        colors = [pc.sample_colorscale(colorscale, idx)[0] for idx in color_indices]
+        
+        # Assign a color to each puzzler
+        for i, name in enumerate(selected_puzzlers):
+            person_traj = get_person_jpar_trajectory(df, name)
+            if not person_traj.empty:
+                fig_jpar.add_trace(go.Scatter(
+                    x=person_traj["event_date"],
+                    y=person_traj["JPAR Out"],
+                    mode="lines+markers",
+                    line=dict(width=5, color=colors[i]),
+                    marker=dict(size=10),
+                    name=name
+                ))
+                
+        # Optional: Show fastest puzzler per event
+        show_fastest = st.checkbox("Show fastest puzzler per event", value=False)
+        if show_fastest:
+            fig_jpar.add_trace(go.Scatter(
+                x=trend_df["event_date"],
+                y=trend_df["fastest"],
+                mode="lines+markers",
+                line=dict(color="black", width=2),
+                name="Fastest JPAR"
+            ))
 
-def display_all_stats(comparison_df, results, df):
+        # Layout
+        fig_jpar.update_layout(
+            title="Evolution of JPAR Distribution Over Time",
+            xaxis_title="Event Date",
+            yaxis_title="JPAR",
+            template="plotly_white",
+            hovermode="x unified",
+            height=500,
+            legend=dict(
+                x=0.02,
+                y=0.98,
+                xanchor="left",
+                yanchor="top",
+                bgcolor="rgba(255,255,255,0.7)",
+                bordercolor="gray",
+                borderwidth=1
+            ),
+            margin=dict(l=40, r=40, t=40, b=20)
+        )
+
+
+        st.plotly_chart(fig_jpar, use_container_width=True)
+    else:
+        st.info("No JPAR trend data available to plot.")
+
+def display_all_stats(comparison_df, df):
     st.markdown("""Here's all the information for all of the puzzlers selected above, sorted first by name and then by date of event.""")
 
     # filter only the columns we want
@@ -251,7 +311,7 @@ def display_all_stats(comparison_df, results, df):
     
 
 
-def display_comparison(styled_table, results, df):
+def display_comparison(df):
     
     # all names
     puzzler_names = sorted(df['Name'].dropna().unique())
@@ -259,27 +319,24 @@ def display_comparison(styled_table, results, df):
     # names currently selected
     selected_puzzlers = st.multiselect(
         "Select puzzlers to compare:",
-        puzzler_names,
+        sorted(df['Name'].dropna().unique()),
     )
 
     if len(selected_puzzlers) < 2:
         st.info("Please select at least two puzzlers.")
     else:
-        
-        # get dataframe of these puzzlers
         comparison_df = df[df['Name'].isin(selected_puzzlers)]
-        
         st.subheader("📊 Summary Statistics")
-        display_summary_stats(comparison_df, results, df)
-        
+        display_summary_stats(comparison_df, df, selected_puzzlers)
+
         st.subheader("📄 All Events")
-        display_all_stats(comparison_df, results, df)
-                        
+        display_all_stats(comparison_df, df)
+    
         
 
     
 st.title("⚔️ Compare Puzzlers")
-display_comparison(styled_table, results, df)
+display_comparison(df)
 st.markdown('---')
 st.markdown(bottom_string)
 
