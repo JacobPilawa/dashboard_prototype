@@ -1,0 +1,11 @@
+datetime
+matplotlib
+plotly
+streamlit
+pandas
+numpy
+scipy
+seaborn
+joblib
+google-cloud-bigquery
+db-dtypes

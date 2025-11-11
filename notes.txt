@@ -1,0 +1,12 @@
+# things to fix
+- remove things on bottom / replace bottom text
+- change description on homepage and title of homepage
+- on puzzler pages:
+	- compute ranking by jpar, 
+	- remove PT Rank, Z Rank, Percentile Rank, Average Rank Score boxes
+	- make it Overall Rank, JPAR Value, Number Events; then second row 
+
+
+other ideas to implement:
+- for each puzzler page, show their times relative to the distribution in little squares/post it things
+- 
