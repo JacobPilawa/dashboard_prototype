@@ -382,3 +382,32 @@ def get_person_jpar_trajectory(df: pd.DataFrame, full_name: str):
     )
 
     return person_df.sort_values("event_date")
+
+def create_history_directory():
+    """
+    Create the history directory inside data folder if it doesn't exist
+    """
+    import os
+    history_dir = './data/history'
+    os.makedirs(history_dir, exist_ok=True)
+    return history_dir
+
+def save_historical_table():
+    """
+    Save the current JPAR display table to the history directory
+    """
+    create_history_directory()
+    df = load_data()
+    table = get_jpar_display_table(df)
+    table.to_csv('./data/history/sample.csv', index=True)
+    return './data/history/sample.csv'
+
+def get_historical_table():
+    """
+    Load the historical table from the history directory
+    """
+    import os
+    history_path = './data/history/sample.csv'
+    if os.path.exists(history_path):
+        return pd.read_csv(history_path, index_col=0)
+    return None

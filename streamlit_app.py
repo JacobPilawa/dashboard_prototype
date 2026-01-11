@@ -42,8 +42,8 @@ profiles = st.Page("nav/profiles.py", title="Puzzlers", icon='👤')
 profiles_sel = st.Page("nav/profiles.py", title="Puzzlers", icon='👤')
 comparisons = st.Page("nav/comparisons.py",title="Compare Puzzlers", icon='⚔️')
 ratings = st.Page("nav/ratings.py", title="JPAR", icon='📊')
-pages = { "": [dashboard, competitions, profiles, comparisons]}
-
+jpar_revisions = st.Page("nav/jpar_revisions.py", title="JPAR Revision History", icon='📝')
+pages = { "": [dashboard, competitions, profiles, comparisons,  jpar_revisions]}
 
 # custom css to increase button and font sizes
 # st.markdown(
